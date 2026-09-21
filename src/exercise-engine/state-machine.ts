@@ -152,7 +152,7 @@ export class ExerciseStateMachine {
   }
 
   /**
-   * Main step function called on every video frame (or simulated landmark update)
+   * Main step function called on every live video frame landmark update
    */
   public update(landmarks: NormalizedLandmarks): LiveWorkoutMetrics {
     const now = Date.now();

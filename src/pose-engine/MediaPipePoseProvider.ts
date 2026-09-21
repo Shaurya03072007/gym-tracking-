@@ -42,8 +42,11 @@ export class MediaPipePoseProvider implements IVisionProvider {
         }
       });
 
+      // Mobile devices run best on modelComplexity 0 for 60 FPS thermal efficiency
+      const isMobile = typeof navigator !== 'undefined' && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
       this.poseModel.setOptions({
-        modelComplexity: 1,
+        modelComplexity: isMobile ? 0 : 1,
         smoothLandmarks: true,
         enableSegmentation: false,
         smoothSegmentation: false,
@@ -60,7 +63,7 @@ export class MediaPipePoseProvider implements IVisionProvider {
               z: lm.z ?? 0,
               visibility: lm.visibility ?? 1
             })),
-            confidence: 0.92,
+            confidence: 0.94,
             detected: true,
             timestamp: Date.now()
           };
@@ -78,7 +81,7 @@ export class MediaPipePoseProvider implements IVisionProvider {
       this.ready = true;
       return true;
     } catch (err) {
-      console.warn('MediaPipe initialization warning (using browser fallback provider):', err);
+      console.warn('MediaPipe initialization notice:', err);
       this.ready = false;
       return false;
     }
