@@ -124,13 +124,13 @@ export const NutritionPage: React.FC<NutritionPageProps> = ({ userProfile }) => 
   };
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-8">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8 sm:px-6 space-y-6 sm:space-y-8">
       {/* Header */}
       <div className="space-y-2">
         <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white">
           AI Sports Nutrition & Meal Architecture
         </h1>
-        <p className="text-sm text-neutral-400 max-w-2xl">
+        <p className="text-xs sm:text-sm text-neutral-400 max-w-2xl">
           Scientifically calibrated macro distribution based on Mifflin-St Jeor thermogenesis, paired with an authentic 500+ Indian & International nutrient database.
         </p>
       </div>
@@ -142,50 +142,50 @@ export const NutritionPage: React.FC<NutritionPageProps> = ({ userProfile }) => 
           <span className="font-bold uppercase tracking-wider text-amber-400 font-mono">
             Medical Disclaimer
           </span>
-          <p className="text-amber-200/90 leading-relaxed">{energy.disclaimer}</p>
+          <p className="text-amber-200/90 leading-relaxed text-[11px] sm:text-xs">{energy.disclaimer}</p>
         </div>
       </div>
 
       {/* Calorie & Macronutrient Targets Breakdown */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
-          <span className="text-xs font-mono text-neutral-400">Target Calories</span>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-white font-mono">{energy.targetCalories}</span>
-            <span className="text-xs text-neutral-500 font-mono">kcal/day</span>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
+          <span className="text-xs font-mono text-neutral-400 truncate block">Target Calories</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-white font-mono">{energy.targetCalories}</span>
+            <span className="text-xs text-neutral-500 font-mono">kcal</span>
           </div>
-          <p className="text-[11px] text-neutral-400">
-            TDEE: {energy.tdee} kcal • BMR: {energy.bmr} kcal
+          <p className="text-[10px] sm:text-[11px] text-neutral-400 truncate">
+            TDEE: {energy.tdee} • BMR: {energy.bmr}
           </p>
         </div>
 
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
-          <span className="text-xs font-mono text-emerald-400">Target Protein (4 kcal/g)</span>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-emerald-400 font-mono">{energy.targetProteinGrams}</span>
-            <span className="text-xs text-neutral-500 font-mono">grams</span>
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
+          <span className="text-xs font-mono text-emerald-400 truncate block">Protein (4 kcal/g)</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">{energy.targetProteinGrams}</span>
+            <span className="text-xs text-neutral-500 font-mono">g</span>
           </div>
-          <p className="text-[11px] text-neutral-400">
-            ~{(energy.targetProteinGrams / (userProfile.weightKg || 74)).toFixed(1)}g per kg bodyweight
+          <p className="text-[10px] sm:text-[11px] text-neutral-400 truncate">
+            ~{(energy.targetProteinGrams / (userProfile.weightKg || 74)).toFixed(1)}g / kg bodyweight
           </p>
         </div>
 
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
-          <span className="text-xs font-mono text-cyan-400">Carbohydrates (4 kcal/g)</span>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-cyan-400 font-mono">{energy.targetCarbsGrams}</span>
-            <span className="text-xs text-neutral-500 font-mono">grams</span>
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
+          <span className="text-xs font-mono text-cyan-400 truncate block">Carbs (4 kcal/g)</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-cyan-400 font-mono">{energy.targetCarbsGrams}</span>
+            <span className="text-xs text-neutral-500 font-mono">g</span>
           </div>
-          <p className="text-[11px] text-neutral-400">Glycogen replenishment & endurance</p>
+          <p className="text-[10px] sm:text-[11px] text-neutral-400 truncate">Glycogen & endurance</p>
         </div>
 
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
-          <span className="text-xs font-mono text-amber-400">Healthy Fats (9 kcal/g)</span>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-amber-400 font-mono">{energy.targetFatGrams}</span>
-            <span className="text-xs text-neutral-500 font-mono">grams</span>
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
+          <span className="text-xs font-mono text-amber-400 truncate block">Fats (9 kcal/g)</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-amber-400 font-mono">{energy.targetFatGrams}</span>
+            <span className="text-xs text-neutral-500 font-mono">g</span>
           </div>
-          <p className="text-[11px] text-neutral-400">Hormonal and joint optimization</p>
+          <p className="text-[10px] sm:text-[11px] text-neutral-400 truncate">Hormonal & joints</p>
         </div>
       </div>
 

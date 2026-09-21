@@ -280,19 +280,8 @@ app.post('/api/body/analyze', async (req: Request, res: Response) => {
     }
 
     if (!ai) {
-      return res.json({
-        observations: [
-          'Visible athletic posture with balanced shoulder symmetry.',
-          'Slight forward head tilt detected; recommended neck retractions and upper back mobility.',
-          'Neutral hip leveling observed from this view.'
-        ],
-        bodyProportions: 'Balanced limb-to-torso ratio suitable for both squat and hinge dominance.',
-        mobilityRecommendations: [
-          'Incorporate doorway pectoral stretches to open anterior chest.',
-          'Perform glute bridges and bird-dogs to maintain pelvic stability.'
-        ],
-        disclaimer:
-          'MANDATORY DISCLAIMER: Photographic analysis provides approximate visual posture observations only. It does NOT measure body fat percentage, muscle mass, or clinical orthopedic conditions. Consult a licensed physical therapist or healthcare professional for clinical diagnoses.'
+      return res.status(503).json({
+        error: 'Gemini Vision AI is required for photographic posture analysis. Please add your GEMINI_API_KEY in the environment or Settings.'
       });
     }
 

@@ -550,14 +550,16 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                 <div className="flex items-center space-x-1 justify-end">
                   <span
                     className={`text-2xl font-black font-mono ${
-                      (metrics?.formScore.totalScore || 90) >= 80
-                        ? 'text-emerald-400'
-                        : (metrics?.formScore.totalScore || 90) >= 60
-                        ? 'text-amber-400'
-                        : 'text-red-400'
+                      metrics?.formScore?.totalScore
+                        ? metrics.formScore.totalScore >= 80
+                          ? 'text-emerald-400'
+                          : metrics.formScore.totalScore >= 60
+                          ? 'text-amber-400'
+                          : 'text-red-400'
+                        : 'text-neutral-500'
                     }`}
                   >
-                    {metrics?.formScore.totalScore ?? 92}
+                    {metrics?.formScore?.totalScore ? metrics.formScore.totalScore : '--'}
                   </span>
                   <span className="text-xs text-neutral-500 font-mono">/100</span>
                 </div>
@@ -659,65 +661,65 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
               <div className="flex justify-between items-center">
                 <span className="text-neutral-400">Joint Alignment</span>
                 <span className="font-mono font-bold text-white">
-                  {metrics?.formScore.jointAlignment ?? 24} / 25
+                  {metrics?.formScore ? `${metrics.formScore.jointAlignment} / 25` : '-- / 25'}
                 </span>
               </div>
               <div className="h-1.5 w-full rounded-full bg-neutral-800 overflow-hidden">
                 <div
-                  className="h-full bg-emerald-500"
-                  style={{ width: `${((metrics?.formScore.jointAlignment ?? 24) / 25) * 100}%` }}
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${metrics?.formScore ? (metrics.formScore.jointAlignment / 25) * 100 : 0}%` }}
                 />
               </div>
 
               <div className="flex justify-between items-center pt-1">
                 <span className="text-neutral-400">Range of Motion</span>
                 <span className="font-mono font-bold text-white">
-                  {metrics?.formScore.rangeOfMotion ?? 23} / 25
+                  {metrics?.formScore ? `${metrics.formScore.rangeOfMotion} / 25` : '-- / 25'}
                 </span>
               </div>
               <div className="h-1.5 w-full rounded-full bg-neutral-800 overflow-hidden">
                 <div
-                  className="h-full bg-cyan-400"
-                  style={{ width: `${((metrics?.formScore.rangeOfMotion ?? 23) / 25) * 100}%` }}
+                  className="h-full bg-cyan-400 transition-all duration-300"
+                  style={{ width: `${metrics?.formScore ? (metrics.formScore.rangeOfMotion / 25) * 100 : 0}%` }}
                 />
               </div>
 
               <div className="flex justify-between items-center pt-1">
                 <span className="text-neutral-400">Movement Control</span>
                 <span className="font-mono font-bold text-white">
-                  {metrics?.formScore.movementControl ?? 19} / 20
+                  {metrics?.formScore ? `${metrics.formScore.movementControl} / 20` : '-- / 20'}
                 </span>
               </div>
               <div className="h-1.5 w-full rounded-full bg-neutral-800 overflow-hidden">
                 <div
-                  className="h-full bg-emerald-400"
-                  style={{ width: `${((metrics?.formScore.movementControl ?? 19) / 20) * 100}%` }}
+                  className="h-full bg-emerald-400 transition-all duration-300"
+                  style={{ width: `${metrics?.formScore ? (metrics.formScore.movementControl / 20) * 100 : 0}%` }}
                 />
               </div>
 
               <div className="flex justify-between items-center pt-1">
                 <span className="text-neutral-400">Bilateral Symmetry</span>
                 <span className="font-mono font-bold text-white">
-                  {metrics?.formScore.symmetry ?? 14} / 15
+                  {metrics?.formScore ? `${metrics.formScore.symmetry} / 15` : '-- / 15'}
                 </span>
               </div>
               <div className="h-1.5 w-full rounded-full bg-neutral-800 overflow-hidden">
                 <div
-                  className="h-full bg-emerald-500"
-                  style={{ width: `${((metrics?.formScore.symmetry ?? 14) / 15) * 100}%` }}
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${metrics?.formScore ? (metrics.formScore.symmetry / 15) * 100 : 0}%` }}
                 />
               </div>
 
               <div className="flex justify-between items-center pt-1">
                 <span className="text-neutral-400">Tempo Adherence</span>
                 <span className="font-mono font-bold text-white">
-                  {metrics?.formScore.tempo ?? 14} / 15
+                  {metrics?.formScore ? `${metrics.formScore.tempo} / 15` : '-- / 15'}
                 </span>
               </div>
               <div className="h-1.5 w-full rounded-full bg-neutral-800 overflow-hidden">
                 <div
-                  className="h-full bg-cyan-500"
-                  style={{ width: `${((metrics?.formScore.tempo ?? 14) / 15) * 100}%` }}
+                  className="h-full bg-cyan-500 transition-all duration-300"
+                  style={{ width: `${metrics?.formScore ? (metrics.formScore.tempo / 15) * 100 : 0}%` }}
                 />
               </div>
             </div>

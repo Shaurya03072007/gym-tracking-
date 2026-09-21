@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
+import { MobileNavBar } from './components/MobileNavBar';
 import { DashboardPage } from './pages/DashboardPage';
 import { WorkoutCameraPage } from './pages/WorkoutCameraPage';
 import { ExerciseLibraryPage } from './pages/ExerciseLibraryPage';
@@ -48,7 +49,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 pb-16">
+      <main className="flex-1 pb-24 lg:pb-16">
         {currentTab === 'dashboard' && (
           <DashboardPage
             userProfile={userProfile}
@@ -111,6 +112,12 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Persistent Mobile Bottom Navigation Bar */}
+      <MobileNavBar
+        currentTab={currentTab}
+        onSelectTab={setCurrentTab}
+      />
 
       {/* Subtle Footer */}
       <footer className="border-t border-neutral-800/80 bg-neutral-950 py-6 text-center text-xs text-neutral-500">

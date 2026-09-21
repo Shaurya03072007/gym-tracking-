@@ -7,7 +7,8 @@ import {
   Trash2,
   Sparkles,
   ShieldAlert,
-  ArrowRight
+  ArrowRight,
+  AlertCircle
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -28,10 +29,13 @@ export const BodyScanPage: React.FC<BodyScanPageProps> = ({ userProfile }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
 
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setErrorMessage(null);
     const reader = new FileReader();
     reader.onload = () => {
       setPhotoPreview(reader.result as string);
@@ -45,6 +49,7 @@ export const BodyScanPage: React.FC<BodyScanPageProps> = ({ userProfile }) => {
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
 
+    setErrorMessage(null);
     const reader = new FileReader();
     reader.onload = () => {
       setPhotoPreview(reader.result as string);
@@ -56,6 +61,7 @@ export const BodyScanPage: React.FC<BodyScanPageProps> = ({ userProfile }) => {
   const runAnalysis = async () => {
     if (!photoPreview) return;
     setIsAnalyzing(true);
+    setErrorMessage(null);
 
     try {
       const res = await fetch('/api/body/analyze', {
@@ -69,26 +75,21 @@ export const BodyScanPage: React.FC<BodyScanPageProps> = ({ userProfile }) => {
       });
 
       const data = await res.json();
+      if (!res.ok || data.error) {
+        setErrorMessage(data.error || 'Failed to analyze photo. Ensure Gemini API key is set.');
+        return;
+      }
+
       setResult({
-        observations: data.observations || [
-          'Visible athletic posture with balanced shoulder leveling.',
-          'Neutral hip leveling observed from this perspective.',
-          'Slight forward head tilt detected; recommended chin tucks and thoracic extension.'
-        ],
-        bodyProportions:
-          data.bodyProportions ||
-          'Favorable femur-to-torso proportion allowing upright posture in squats and hinges.',
-        mobilityRecommendations: data.mobilityRecommendations || [
-          'Doorway pectoral stretch: 3 sets of 30 seconds',
-          'Cat-cow thoracic mobilization before heavy loading',
-          'Dead bugs for deep anterior core bracing'
-        ],
+        observations: data.observations || [],
+        bodyProportions: data.bodyProportions || 'No proportion analysis returned.',
+        mobilityRecommendations: data.mobilityRecommendations || [],
         disclaimer:
           data.disclaimer ||
           'MANDATORY DISCLAIMER: Photographic analysis provides approximate visual posture observations only. It does NOT measure clinical body fat percentage, DEXA metrics, or diagnose orthopedic conditions. Consult a qualified physical therapist or doctor for medical evaluations.'
       });
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      setErrorMessage('Network or server error while analyzing image. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -97,6 +98,7 @@ export const BodyScanPage: React.FC<BodyScanPageProps> = ({ userProfile }) => {
   const clearPhoto = () => {
     setPhotoPreview(null);
     setResult(null);
+    setErrorMessage(null);
   };
 
   return (
@@ -203,6 +205,17 @@ export const BodyScanPage: React.FC<BodyScanPageProps> = ({ userProfile }) => {
                 <Sparkles className="h-4 w-4" />
                 <span>{isAnalyzing ? 'Analyzing Biomechanics...' : 'Run Posture Analysis'}</span>
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Error Alert */}
+        {errorMessage && (
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-300 flex items-start space-x-3">
+            <AlertCircle className="h-5 w-5 text-red-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold text-red-300 font-mono uppercase tracking-wider">Analysis Notice</p>
+              <p className="text-neutral-300">{errorMessage}</p>
             </div>
           </div>
         )}

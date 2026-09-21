@@ -35,41 +35,66 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const avgFormScore =
     totalWorkouts > 0
       ? Math.round(workoutHistory.reduce((acc, w) => acc + w.averageFormScore, 0) / totalWorkouts)
-      : 89;
+      : 0;
+
+  // Dynamic streak calculation
+  const streak = React.useMemo(() => {
+    if (!workoutHistory.length) return 0;
+    const uniqueDates = Array.from(new Set(workoutHistory.map((w) => w.date))).sort().reverse();
+    if (!uniqueDates.length) return 0;
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    if (uniqueDates[0] === today || uniqueDates[0] === yesterday) {
+      let count = 1;
+      let curr = new Date(uniqueDates[0]);
+      for (let i = 1; i < uniqueDates.length; i++) {
+        const prev = new Date(uniqueDates[i]);
+        const diffDays = Math.round((curr.getTime() - prev.getTime()) / (1000 * 3600 * 24));
+        if (diffDays === 1) {
+          count++;
+          curr = prev;
+        } else {
+          break;
+        }
+      }
+      return count;
+    }
+    return 0;
+  }, [workoutHistory]);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 space-y-8">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8 sm:px-6 space-y-6 sm:space-y-8">
       {/* Hero Welcome Banner */}
-      <div className="relative overflow-hidden rounded-3xl border border-neutral-800 bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-950 p-6 sm:p-8 shadow-2xl">
+      <div className="relative overflow-hidden rounded-3xl border border-neutral-800 bg-gradient-to-r from-neutral-900 via-neutral-900 to-neutral-950 p-5 sm:p-8 shadow-2xl">
         <div className="absolute right-0 top-0 -mt-12 -mr-12 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl pointer-events-none"></div>
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2">
             <div className="inline-flex items-center space-x-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-mono text-emerald-400">
               <Sparkles className="h-3.5 w-3.5" />
-              <span>AI Gym Vision Engine Active</span>
+              <span>AI Biomechanics Vision Ready</span>
             </div>
             <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight text-white">
-              Welcome back, <span className="text-emerald-400">{userProfile.name || 'Athlete'}</span>
+              Welcome{userProfile.name ? `, ${userProfile.name}` : ''}
             </h1>
-            <p className="text-sm text-neutral-400 max-w-xl">
+            <p className="text-xs sm:text-sm text-neutral-400 max-w-xl">
               Your real-time camera tracking and biometric feedback are calibrated for{' '}
               <strong className="text-neutral-200 uppercase">{userProfile.primaryGoal.replace('_', ' ')}</strong>.
               Ready to crush today’s session?
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
             <button
               id="dashboard-start-squat-btn"
               onClick={() => onStartExercise('squat')}
-              className="flex items-center space-x-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/25"
+              className="flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 px-5 py-3 text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/25 min-h-[44px]"
             >
               <Camera className="h-4 w-4 stroke-[2.5]" />
               <span>Launch Live Workout</span>
             </button>
             <button
               onClick={() => onNavigate('nutrition')}
-              className="flex items-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800/80 px-4 py-3 text-sm font-semibold text-neutral-200 hover:bg-neutral-800 transition-colors"
+              className="flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800/80 px-4 py-3 text-sm font-semibold text-neutral-200 hover:bg-neutral-800 transition-colors min-h-[44px]"
             >
               <Utensils className="h-4 w-4 text-cyan-400" />
               <span>Today’s Meal Plan</span>
@@ -79,64 +104,68 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       </div>
 
       {/* 4 Stat Overview Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Form Score */}
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
           <div className="flex items-center justify-between text-neutral-400 text-xs font-mono">
-            <span>Average Form Score</span>
-            <ShieldCheck className="h-4 w-4 text-emerald-400" />
+            <span className="truncate">Form Score</span>
+            <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           </div>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-emerald-400 font-mono">{avgFormScore}</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-emerald-400 font-mono">
+              {totalWorkouts > 0 ? avgFormScore : '--'}
+            </span>
             <span className="text-xs text-neutral-500 font-mono">/ 100</span>
           </div>
-          <p className="text-[11px] text-emerald-300">
-            Top 5% biomechanical consistency
+          <p className="text-[10px] sm:text-[11px] text-emerald-300 truncate">
+            {totalWorkouts > 0 ? `${totalWorkouts} verified sessions` : 'Awaiting 1st session'}
           </p>
         </div>
 
         {/* Total Reps */}
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
           <div className="flex items-center justify-between text-neutral-400 text-xs font-mono">
-            <span>Total Reps Tracked</span>
-            <Activity className="h-4 w-4 text-cyan-400" />
+            <span className="truncate">Total Reps</span>
+            <Activity className="h-4 w-4 text-cyan-400 shrink-0" />
           </div>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-white font-mono">{totalReps || 92}</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-white font-mono">{totalReps}</span>
             <span className="text-xs text-neutral-500 font-mono">reps</span>
           </div>
-          <p className="text-[11px] text-neutral-400">
-            Across {totalWorkouts || 3} recorded sessions
+          <p className="text-[10px] sm:text-[11px] text-neutral-400 truncate">
+            {totalWorkouts} recorded session{totalWorkouts === 1 ? '' : 's'}
           </p>
         </div>
 
         {/* Calorie Goal */}
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
           <div className="flex items-center justify-between text-neutral-400 text-xs font-mono">
-            <span>Target Calories</span>
-            <Flame className="h-4 w-4 text-amber-400" />
+            <span className="truncate">Target Calories</span>
+            <Flame className="h-4 w-4 text-amber-400 shrink-0" />
           </div>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-amber-400 font-mono">{userProfile.targetCalories || 2950}</span>
-            <span className="text-xs text-neutral-500 font-mono">kcal/day</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-amber-400 font-mono">
+              {userProfile.targetCalories || 2850}
+            </span>
+            <span className="text-xs text-neutral-500 font-mono">kcal</span>
           </div>
-          <p className="text-[11px] text-neutral-400">
-            {userProfile.targetProteinGrams || 160}g protein target
+          <p className="text-[10px] sm:text-[11px] text-neutral-400 truncate">
+            {userProfile.targetProteinGrams || 155}g protein target
           </p>
         </div>
 
         {/* Weekly Consistency */}
-        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-2">
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-5 space-y-1.5">
           <div className="flex items-center justify-between text-neutral-400 text-xs font-mono">
-            <span>Workout Streak</span>
-            <Award className="h-4 w-4 text-purple-400" />
+            <span className="truncate">Active Streak</span>
+            <Award className="h-4 w-4 text-purple-400 shrink-0" />
           </div>
-          <div className="flex items-baseline space-x-2">
-            <span className="text-3xl font-black text-white font-mono">4</span>
+          <div className="flex items-baseline space-x-1.5">
+            <span className="text-2xl sm:text-3xl font-black text-white font-mono">{streak}</span>
             <span className="text-xs text-neutral-500 font-mono">days active</span>
           </div>
-          <p className="text-[11px] text-emerald-400 font-medium">
-            Goal: {userProfile.trainingFrequencyDays || 4} sessions/week
+          <p className="text-[10px] sm:text-[11px] text-emerald-400 font-medium truncate">
+            Goal: {userProfile.trainingFrequencyDays || 4} days/week
           </p>
         </div>
       </div>
@@ -220,36 +249,59 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </div>
 
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-5 space-y-4">
-            {workoutHistory.slice(0, 3).map((w) => (
-              <div key={w.id} className="border-b border-neutral-800/80 pb-3 last:border-b-0 last:pb-0 space-y-1.5">
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-bold text-white">{w.exerciseName}</span>
-                  <span className="font-mono text-[11px] text-neutral-400">{w.date}</span>
+            {workoutHistory.length === 0 ? (
+              <div className="text-center py-6 space-y-3">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-neutral-800 text-neutral-400">
+                  <Activity className="h-5 w-5" />
                 </div>
-                <div className="flex items-center space-x-3 text-xs text-neutral-400">
-                  <span>{w.totalReps} total reps</span>
-                  <span>•</span>
-                  <span>{w.sets.length} sets</span>
-                  <span>•</span>
-                  <span className="font-mono font-bold text-emerald-400">
-                    {w.averageFormScore}/100 form
-                  </span>
-                </div>
-                {w.issuesEncountered && w.issuesEncountered.length > 0 && (
-                  <p className="text-[11px] text-amber-300/80 font-mono">
-                    Flagged: {w.issuesEncountered[0]}
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-white">No Sessions Logged Yet</p>
+                  <p className="text-[11px] text-neutral-400 max-w-xs mx-auto">
+                    Start a workout with your camera to begin generating 60 FPS form scores and joint angle logs.
                   </p>
-                )}
+                </div>
+                <button
+                  onClick={() => onStartExercise('squat')}
+                  className="inline-flex items-center space-x-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20 transition-colors min-h-[40px]"
+                >
+                  <Camera className="h-3.5 w-3.5" />
+                  <span>Start Live Squat Tracking</span>
+                </button>
               </div>
-            ))}
+            ) : (
+              workoutHistory.slice(0, 3).map((w) => (
+                <div key={w.id} className="border-b border-neutral-800/80 pb-3 last:border-b-0 last:pb-0 space-y-1.5">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-bold text-white">{w.exerciseName}</span>
+                    <span className="font-mono text-[11px] text-neutral-400">{w.date}</span>
+                  </div>
+                  <div className="flex items-center space-x-3 text-xs text-neutral-400">
+                    <span>{w.totalReps} total reps</span>
+                    <span>•</span>
+                    <span>{w.sets.length} sets</span>
+                    <span>•</span>
+                    <span className="font-mono font-bold text-emerald-400">
+                      {w.averageFormScore}/100 form
+                    </span>
+                  </div>
+                  {w.issuesEncountered && w.issuesEncountered.length > 0 && (
+                    <p className="text-[11px] text-amber-300/80 font-mono">
+                      Flagged: {w.issuesEncountered[0]}
+                    </p>
+                  )}
+                </div>
+              ))
+            )}
 
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3.5 text-xs text-emerald-300 space-y-1">
               <div className="flex items-center space-x-1.5 font-bold uppercase font-mono text-[11px]">
                 <Sparkles className="h-3.5 w-3.5 text-emerald-400" />
                 <span>Coach Recommendation</span>
               </div>
-              <p className="text-neutral-300">
-                Your squat depth improved by 8% over the last week. Prioritize a 2-second pause at the bottom to build quadriceps stretch reflex!
+              <p className="text-neutral-300 text-[11px] leading-relaxed">
+                {workoutHistory.length === 0
+                  ? 'Set your phone or laptop camera roughly 6–8 feet away. The 60 FPS vision engine will track your joint angles and count reps hands-free!'
+                  : 'Maintain a 2-second controlled eccentric tempo on your lowering phase to maximize motor unit recruitment.'}
               </p>
             </div>
           </div>
