@@ -1,0 +1,11 @@
+{
+  "name": "FitVision AI — AI Gym Tracking & Personal Coach",
+  "description": "Real-time AI gym tracking, computer vision pose estimation, biomechanical form analysis, rep counting, and personal fitness coaching.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
