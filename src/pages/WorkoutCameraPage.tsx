@@ -27,7 +27,8 @@ import {
   UploadCloud,
   ShieldAlert,
   ShieldCheck,
-  QrCode
+  QrCode,
+  Play
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import QRCode from 'qrcode';
@@ -40,6 +41,7 @@ import { IVisionProvider } from '../pose-engine/VisionProvider';
 import { AudioCoach } from '../services/audioCoach';
 import { saveWorkoutSession } from '../services/storage';
 import { CoachingMessage, ExerciseDefinition, LiveWorkoutMetrics, UserProfile } from '../types';
+import { createSampleWorkoutStream, SampleWorkoutHandle } from '../utils/sampleWorkoutVideo';
 
 interface WorkoutCameraPageProps {
   userProfile: UserProfile;
@@ -52,7 +54,7 @@ interface CameraErrorInfo {
   title: string;
   message: string;
   detail?: string;
-  actionType: 'open-tab' | 'retry' | 'settings' | 'video-upload';
+  actionType: 'open-tab' | 'retry' | 'settings' | 'video-upload' | 'sample-video';
 }
 
 export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
@@ -111,6 +113,8 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const lastFrameTimeRef = useRef<number>(Date.now());
   const lastSystemStreamSyncRef = useRef<number>(0);
   const completedRepsRef = useRef<RepCompletedEvent[]>([]);
+  const sampleWorkoutRef = useRef<SampleWorkoutHandle | null>(null);
+  const [isSampleWorkoutActive, setIsSampleWorkoutActive] = useState(false);
 
   // Detect iframe and LAN environment on mount, fetch server info and generate QR code
   useEffect(() => {
@@ -289,6 +293,13 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
       videoRef.current.src = '';
     }
 
+    // Stop sample workout if active
+    if (sampleWorkoutRef.current) {
+      sampleWorkoutRef.current.stop();
+      sampleWorkoutRef.current = null;
+    }
+    setIsSampleWorkoutActive(false);
+
     // Check mediaDevices support (may be disabled on plain HTTP on LAN by some mobile browsers)
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setIsRequestingCamera(false);
@@ -309,14 +320,50 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
           title: 'Camera Device API Unavailable',
           message: 'navigator.mediaDevices.getUserMedia is not supported by your current browser engine or webview.',
           detail: navigator.userAgent,
-          actionType: 'open-tab'
+          actionType: 'sample-video'
         });
       }
       return;
     }
 
+    // Enumerate connected video devices to detect absence of physical webcam early
+    let videoInputs: MediaDeviceInfo[] = [];
+    try {
+      if (navigator.mediaDevices.enumerateDevices) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      }
+    } catch {
+      // ignore
+    }
+
+    // If enumerateDevices reported 0 video inputs, we know with certainty there's no camera hardware
+    if (videoInputs.length === 0 && Boolean(navigator.mediaDevices?.enumerateDevices)) {
+      setIsRequestingCamera(false);
+      setCameraErrorInfo({
+        type: 'not-found',
+        title: 'No Physical Camera Hardware Found',
+        message: 'No physical webcam or video capture device was detected on this device.',
+        detail: 'Click "Play Sample Workout Video" below to test the live AI skeletal tracking, angle gauges, rep counter, and voice coach instantly!',
+        actionType: 'sample-video'
+      });
+      return;
+    }
+
     // Progressive constraint attempts (high-def down to basic video)
-    const constraintVariants: MediaStreamConstraints[] = [
+    const constraintVariants: MediaStreamConstraints[] = [];
+
+    // If specific video devices are identified, try exact deviceId first
+    for (const dev of videoInputs) {
+      if (dev.deviceId) {
+        constraintVariants.push({
+          video: { deviceId: { exact: dev.deviceId } },
+          audio: false
+        });
+      }
+    }
+
+    constraintVariants.push(
       // Primary: Gym resolution with ideal facing
       {
         video: {
@@ -345,7 +392,7 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
         video: true,
         audio: false
       }
-    ];
+    );
 
     let activeStream: MediaStream | null = null;
     let lastError: any = null;
@@ -402,13 +449,20 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
             : 'To allow: Tap the lock (🔒) or page settings (aA) icon in your mobile browser address bar, set Camera to "Allow", and reload.',
           actionType: isIframe ? 'open-tab' : 'settings'
         });
-      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+      } else if (
+        errName === 'NotFoundError' ||
+        errName === 'DevicesNotFoundError' ||
+        errName === 'OverconstrainedError' ||
+        errMessage.toLowerCase().includes('not found') ||
+        errMessage.toLowerCase().includes('device not found') ||
+        errMessage.toLowerCase().includes('no video input')
+      ) {
         setCameraErrorInfo({
           type: 'not-found',
-          title: 'No Camera Detected',
-          message: 'No physical camera hardware was found on this device or the camera is disabled.',
-          detail: errMessage,
-          actionType: 'video-upload'
+          title: 'No Camera Hardware Detected',
+          message: 'No physical webcam or video capture device was detected on this device.',
+          detail: 'You can test full real-time AI skeletal tracking, angle gauges, rep counting, and audio coaching immediately using the built-in Sample Workout Video!',
+          actionType: 'sample-video'
         });
       } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
         setCameraErrorInfo({
@@ -421,10 +475,10 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
       } else {
         setCameraErrorInfo({
           type: 'generic',
-          title: 'Camera Initialization Error',
-          message: errMessage || 'Unable to connect to the camera hardware.',
-          detail: `Error code: ${errName || 'UNKNOWN'}`,
-          actionType: 'open-tab'
+          title: 'Camera Hardware Notice',
+          message: errMessage || 'Unable to connect to camera hardware.',
+          detail: `Notice: ${errName || 'NO_INPUT_DEVICE'}`,
+          actionType: 'sample-video'
         });
       }
       return;
@@ -464,6 +518,12 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   };
 
   const stopWebcam = () => {
+    if (sampleWorkoutRef.current) {
+      sampleWorkoutRef.current.stop();
+      sampleWorkoutRef.current = null;
+    }
+    setIsSampleWorkoutActive(false);
+
     if (videoRef.current) {
       if (videoRef.current.srcObject) {
         try {
@@ -477,6 +537,30 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
     setIsWebcamActive(false);
     setIsTorchOn(false);
     setFramingStatus('none');
+  };
+
+  // Launch simulated real-time athletic gym workout stream (instant test when camera is unavailable)
+  const startSampleWorkout = (exerciseType: 'squat' | 'pushup' | 'curl' = 'squat') => {
+    stopWebcam();
+    setCameraErrorInfo(null);
+
+    const sample = createSampleWorkoutStream(exerciseType);
+    sampleWorkoutRef.current = sample;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = sample.stream;
+      videoRef.current.play().then(() => {
+        setIsWebcamActive(true);
+        setIsSampleWorkoutActive(true);
+        setIsMirrored(false);
+        setCameraErrorInfo(null);
+        if (!isAudioMuted) {
+          AudioCoach.speak('Sample workout video started. AI skeletal tracking and rep counter active!');
+        }
+      }).catch((err) => {
+        console.warn('Sample video stream start notice:', err);
+      });
+    }
   };
 
   // Handle direct video upload / native camera capture analysis
@@ -1106,6 +1190,49 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                 </button>
               </div>
             </div>
+          ) : cameraErrorInfo.type === 'not-found' ? (
+            /* Dedicated Actions when No Physical Camera Hardware is Detected */
+            <div className="flex flex-wrap items-center gap-2.5 pt-1">
+              <button
+                id="play-sample-video-btn"
+                onClick={() => startSampleWorkout('squat')}
+                className="inline-flex items-center space-x-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
+              >
+                <Play className="h-4 w-4 fill-neutral-950" />
+                <span>▶ Play Sample Workout Video (Instant AI Test)</span>
+              </button>
+
+              <button
+                id="upload-gym-video-btn"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center space-x-1.5 rounded-xl border border-cyan-500/40 bg-cyan-500/10 px-4 py-2.5 text-xs sm:text-sm font-bold text-cyan-400 hover:bg-cyan-500/20 transition-all cursor-pointer"
+              >
+                <UploadCloud className="h-4 w-4" />
+                <span>Upload / Record Video Set</span>
+              </button>
+
+              <button
+                onClick={() => setShowQrModal(true)}
+                className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3.5 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
+              >
+                <QrCode className="h-3.5 w-3.5 text-emerald-400" />
+                <span>Scan QR for Mobile Camera</span>
+              </button>
+
+              <button
+                id="retry-camera-btn"
+                onClick={() => startWebcam(facingMode)}
+                disabled={isRequestingCamera}
+                className="inline-flex items-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700 transition-all disabled:opacity-50 cursor-pointer"
+              >
+                {isRequestingCamera ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                ) : (
+                  <Camera className="h-4 w-4 text-emerald-400" />
+                )}
+                <span>{isRequestingCamera ? 'Probing...' : 'Retry Camera'}</span>
+              </button>
+            </div>
           ) : (
             /* Standard Diagnostic Action Buttons for other errors */
             <div className="flex flex-wrap items-center gap-2.5 pt-1">
@@ -1135,18 +1262,11 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
               </button>
 
               <button
-                id="copy-link-btn"
-                onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    navigator.clipboard.writeText(window.location.href);
-                    setHasCopiedAppUrl(true);
-                    setTimeout(() => setHasCopiedAppUrl(false), 2000);
-                  }
-                }}
-                className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
+                onClick={() => startSampleWorkout('squat')}
+                className="inline-flex items-center space-x-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2.5 text-xs font-bold text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer"
               >
-                {hasCopiedAppUrl ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                <span>{hasCopiedAppUrl ? 'URL Copied!' : 'Copy Direct URL'}</span>
+                <Play className="h-3.5 w-3.5 fill-emerald-400" />
+                <span>Sample Workout</span>
               </button>
 
               <button
@@ -1155,7 +1275,7 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                 className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
               >
                 <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
-                <span>Upload / Record Video Set</span>
+                <span>Upload / Record Video</span>
               </button>
 
               <button
@@ -1163,7 +1283,7 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                 className="inline-flex items-center space-x-1 text-xs text-neutral-400 hover:text-emerald-400 underline ml-auto"
               >
                 <HelpCircle className="h-3.5 w-3.5" />
-                <span>{showTroubleshootGuide ? 'Hide Permission Steps' : 'How to Allow in Browser'}</span>
+                <span>{showTroubleshootGuide ? 'Hide Steps' : 'How to Allow'}</span>
               </button>
             </div>
           )}
@@ -1267,11 +1387,47 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                           </button>
                         </div>
                         <button
+                          onClick={() => startSampleWorkout('squat')}
+                          className="w-full flex items-center justify-center space-x-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 py-2 px-3 text-xs text-emerald-300 hover:bg-emerald-500/20"
+                        >
+                          <Play className="h-3.5 w-3.5 fill-emerald-300" />
+                          <span>Or Play Sample Workout Stream (No Camera Needed)</span>
+                        </button>
+                      </div>
+                    ) : cameraErrorInfo.type === 'not-found' ? (
+                      <div className="flex flex-col gap-2.5 w-full pt-2">
+                        <button
+                          id="play-sample-video-overlay-btn"
+                          onClick={() => startSampleWorkout('squat')}
+                          className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3.5 px-5 text-sm font-bold text-neutral-950 hover:bg-emerald-400 shadow-xl shadow-emerald-500/25 cursor-pointer"
+                        >
+                          <Play className="h-4 w-4 fill-neutral-950" />
+                          <span>Play Sample Workout Video (Instant AI Test)</span>
+                        </button>
+
+                        <div className="flex flex-col sm:flex-row items-center gap-2 w-full">
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="w-full flex items-center justify-center space-x-2 rounded-xl border border-cyan-500/40 bg-cyan-500/10 py-2.5 px-4 text-xs font-bold text-cyan-300 hover:bg-cyan-500/20 cursor-pointer"
+                          >
+                            <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
+                            <span>Upload / Record Video</span>
+                          </button>
+                          <button
+                            onClick={() => setShowQrModal(true)}
+                            className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-800 bg-neutral-900 py-2.5 px-4 text-xs font-semibold text-neutral-300 hover:text-white cursor-pointer"
+                          >
+                            <QrCode className="h-3.5 w-3.5 text-emerald-400" />
+                            <span>Open on Phone</span>
+                          </button>
+                        </div>
+
+                        <button
                           onClick={() => startWebcam(facingMode)}
                           className="w-full flex items-center justify-center space-x-1.5 rounded-lg border border-neutral-800 bg-neutral-900 py-2 px-3 text-xs text-neutral-400 hover:text-white"
                         >
                           <Camera className="h-3.5 w-3.5 text-emerald-400" />
-                          <span>Retry WebRTC Camera</span>
+                          <span>Retry Camera Detection</span>
                         </button>
                       </div>
                     ) : (
@@ -1296,13 +1452,23 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                           </button>
                         </div>
 
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="inline-flex items-center space-x-1.5 text-xs text-neutral-400 hover:text-cyan-400 pt-1"
-                        >
-                          <UploadCloud className="h-3.5 w-3.5" />
-                          <span>Or record / analyze video with native camera</span>
-                        </button>
+                        <div className="flex items-center gap-3 pt-1">
+                          <button
+                            onClick={() => startSampleWorkout('squat')}
+                            className="inline-flex items-center space-x-1.5 text-xs font-semibold text-emerald-400 hover:underline"
+                          >
+                            <Play className="h-3.5 w-3.5 fill-emerald-400" />
+                            <span>Try Sample Workout</span>
+                          </button>
+                          <span className="text-neutral-600">•</span>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="inline-flex items-center space-x-1.5 text-xs text-neutral-400 hover:text-cyan-400"
+                          >
+                            <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
+                            <span>Upload video</span>
+                          </button>
+                        </div>
                       </>
                     )}
                   </div>
@@ -1338,16 +1504,22 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                       </button>
                     </div>
 
-                    <div className="mt-4 flex items-center space-x-3 text-[11px] font-mono text-neutral-400">
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-xs">
+                      <button
+                        id="start-sample-workout-btn"
+                        onClick={() => startSampleWorkout('squat')}
+                        className="inline-flex items-center space-x-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 font-bold text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer shadow-sm"
+                      >
+                        <Play className="h-3.5 w-3.5 fill-emerald-400" />
+                        <span>Try Live Sample Workout (No Camera Needed)</span>
+                      </button>
                       <button
                         onClick={() => fileInputRef.current?.click()}
-                        className="flex items-center space-x-1.5 text-neutral-400 hover:text-cyan-400 underline cursor-pointer"
+                        className="inline-flex items-center space-x-1.5 text-neutral-400 hover:text-cyan-400 cursor-pointer"
                       >
                         <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
-                        <span>Analyze recorded set video</span>
+                        <span>Analyze recorded set</span>
                       </button>
-                      <span>•</span>
-                      <span>Audio Coach Ready</span>
                     </div>
                   </>
                 )}
@@ -1365,7 +1537,50 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
             {/* Athlete Distance & Calibration Status Banner */}
             {isWebcamActive && (
               <div className="absolute top-3 inset-x-0 z-30 flex justify-center pointer-events-none px-4">
-                {framingStatus === 'locked' ? (
+                {isSampleWorkoutActive ? (
+                  <div className="pointer-events-auto inline-flex items-center space-x-2 rounded-full border border-cyan-500/50 bg-neutral-950/90 backdrop-blur-md px-3.5 py-1 text-xs font-mono font-bold text-cyan-300 shadow-xl">
+                    <Play className="h-3 w-3 fill-cyan-400" />
+                    <span>Sample Workout Active</span>
+                    <div className="flex items-center space-x-1 pl-2 border-l border-neutral-700">
+                      <button
+                        onClick={() => {
+                          const ex = EXERCISE_LIBRARY.find((e) => e.id === 'squat');
+                          if (ex) setSelectedExercise(ex);
+                          startSampleWorkout('squat');
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] bg-neutral-850 hover:bg-neutral-700 text-white cursor-pointer"
+                      >
+                        Squat
+                      </button>
+                      <button
+                        onClick={() => {
+                          const ex = EXERCISE_LIBRARY.find((e) => e.id === 'pushup');
+                          if (ex) setSelectedExercise(ex);
+                          startSampleWorkout('pushup');
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] bg-neutral-850 hover:bg-neutral-700 text-white cursor-pointer"
+                      >
+                        Push-up
+                      </button>
+                      <button
+                        onClick={() => {
+                          const ex = EXERCISE_LIBRARY.find((e) => e.id === 'bicep-curl');
+                          if (ex) setSelectedExercise(ex);
+                          startSampleWorkout('curl');
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] bg-neutral-850 hover:bg-neutral-700 text-white cursor-pointer"
+                      >
+                        Curl
+                      </button>
+                      <button
+                        onClick={stopWebcam}
+                        className="px-2 py-0.5 rounded text-[10px] bg-red-500/20 text-red-300 hover:bg-red-500/30 cursor-pointer ml-1"
+                      >
+                        Stop
+                      </button>
+                    </div>
+                  </div>
+                ) : framingStatus === 'locked' ? (
                   <div className="inline-flex items-center space-x-2 rounded-full border border-emerald-500/40 bg-neutral-950/85 backdrop-blur-md px-3.5 py-1 text-xs font-mono font-bold text-emerald-400 shadow-xl">
                     <span className="h-2 w-2 rounded-full bg-emerald-400 animate-ping"></span>
                     <span>✓ Athlete Full Body Locked — Tracking {selectedExercise.name}</span>

@@ -77,28 +77,44 @@ export class MediaPipePoseProvider implements IVisionProvider {
         }
       });
 
-      await this.poseModel.initialize();
+      // Initialize with a 6-second timeout race to prevent hanging on slow network / firewalls
+      const initPromise = this.poseModel.initialize();
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('MediaPipe initialization timed out')), 6000)
+      );
+
+      await Promise.race([initPromise, timeoutPromise]);
       this.ready = true;
       return true;
     } catch (err) {
-      console.warn('MediaPipe initialization notice:', err);
+      console.warn('MediaPipe initialization notice (falling back to Kinematic Vision Engine):', err);
       this.ready = false;
       return false;
     }
   }
 
-  private loadScript(src: string): Promise<void> {
+  private async loadScript(src: string): Promise<void> {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing && window.Pose) {
+      return;
+    }
+
     return new Promise((resolve, reject) => {
-      const existing = document.querySelector(`script[src="${src}"]`);
-      if (existing) {
-        resolve();
-        return;
-      }
       const script = document.createElement('script');
       script.src = src;
       script.crossOrigin = 'anonymous';
-      script.onload = () => resolve();
-      script.onerror = (e) => reject(e);
+      const timer = setTimeout(() => {
+        reject(new Error(`Loading script ${src} timed out`));
+      }, 5000);
+
+      script.onload = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      script.onerror = (e) => {
+        clearTimeout(timer);
+        reject(e);
+      };
       document.head.appendChild(script);
     });
   }
