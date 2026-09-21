@@ -20,7 +20,13 @@ import {
   Copy,
   Check,
   Zap,
-  Target
+  Target,
+  ExternalLink,
+  Loader2,
+  HelpCircle,
+  UploadCloud,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { EXERCISE_LIBRARY } from '../exercise-engine/exercises';
@@ -37,6 +43,14 @@ interface WorkoutCameraPageProps {
   userProfile: UserProfile;
   preselectedExerciseId?: string;
   onNavigateToExercises?: () => void;
+}
+
+interface CameraErrorInfo {
+  type: 'iframe-restriction' | 'permission-denied' | 'not-found' | 'busy' | 'insecure' | 'generic';
+  title: string;
+  message: string;
+  detail?: string;
+  actionType: 'open-tab' | 'retry' | 'settings' | 'video-upload';
 }
 
 export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
@@ -58,7 +72,10 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const [isTorchOn, setIsTorchOn] = useState(false);
   const [torchSupported, setTorchSupported] = useState(false);
   const [fps, setFps] = useState(0);
-  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraErrorInfo, setCameraErrorInfo] = useState<CameraErrorInfo | null>(null);
+  const [isRequestingCamera, setIsRequestingCamera] = useState(false);
+  const [isInIframe, setIsInIframe] = useState(false);
+  const [showTroubleshootGuide, setShowTroubleshootGuide] = useState(false);
 
   // Athlete framing status (detected from real camera landmarks)
   const [framingStatus, setFramingStatus] = useState<'none' | 'partial' | 'locked'>('none');
@@ -67,6 +84,7 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const [gymSessionCode, setGymSessionCode] = useState<string | null>(null);
   const [showPairingModal, setShowPairingModal] = useState(false);
   const [hasCopiedCode, setHasCopiedCode] = useState(false);
+  const [hasCopiedAppUrl, setHasCopiedAppUrl] = useState(false);
 
   // Live Metrics
   const [metrics, setMetrics] = useState<LiveWorkoutMetrics | null>(null);
@@ -79,6 +97,7 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const stateMachineRef = useRef<ExerciseStateMachine | null>(null);
   const visionProviderRef = useRef<IVisionProvider | null>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
@@ -86,6 +105,16 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const lastFrameTimeRef = useRef<number>(Date.now());
   const lastSystemStreamSyncRef = useRef<number>(0);
   const completedRepsRef = useRef<RepCompletedEvent[]>([]);
+
+  // Detect iframe environment on mount
+  useEffect(() => {
+    try {
+      const inIframe = typeof window !== 'undefined' && window.self !== window.top;
+      setIsInIframe(inIframe);
+    } catch {
+      setIsInIframe(true);
+    }
+  }, []);
 
   // Rest Timer Interval
   useEffect(() => {
@@ -210,62 +239,231 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
     };
   }, [providerType, selectedExercise]);
 
-  // Camera lifecycle (Optimized for Mobile Gym Tracking)
+  // Camera lifecycle (Optimized for Mobile Gym Tracking with Progressive Fallbacks)
   const startWebcam = async (targetFacing?: 'user' | 'environment') => {
-    try {
-      const mode = targetFacing || facingMode;
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('Webcam is not accessible in this environment. Please enable camera access.');
-        return;
-      }
-      setCameraError(null);
+    setIsRequestingCamera(true);
+    setCameraErrorInfo(null);
 
-      // Stop existing tracks if switching
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((track) => track.stop());
-      }
+    const mode = targetFacing || facingMode;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+    // 1. Verify Secure Context (HTTPS or localhost)
+    if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost') {
+      setIsRequestingCamera(false);
+      setCameraErrorInfo({
+        type: 'insecure',
+        title: 'HTTPS Security Required',
+        message: 'Mobile browsers strictly block camera hardware over unencrypted HTTP connections.',
+        detail: 'Please access this app via HTTPS.',
+        actionType: 'open-tab'
+      });
+      return;
+    }
+
+    // 2. Check mediaDevices support
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setIsRequestingCamera(false);
+      setCameraErrorInfo({
+        type: 'generic',
+        title: 'Camera Device API Unavailable',
+        message: 'navigator.mediaDevices.getUserMedia is not supported by your current browser engine or webview.',
+        detail: navigator.userAgent,
+        actionType: 'open-tab'
+      });
+      return;
+    }
+
+    // Stop existing stream tracks
+    if (videoRef.current) {
+      if (videoRef.current.srcObject) {
+        try {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {}
+        videoRef.current.srcObject = null;
+      }
+      videoRef.current.src = '';
+    }
+
+    // 3. Progressive constraint attempts (high-def down to basic video)
+    const constraintVariants: MediaStreamConstraints[] = [
+      // Primary: Gym resolution with ideal facing
+      {
         video: {
           facingMode: { ideal: mode },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
         audio: false
-      });
+      },
+      // Secondary: Facing mode without fixed resolution
+      {
+        video: {
+          facingMode: mode
+        },
+        audio: false
+      },
+      // Tertiary: Ideal facing without resolution
+      {
+        video: {
+          facingMode: { ideal: mode }
+        },
+        audio: false
+      },
+      // Fallback: Simplest universal video constraint
+      {
+        video: true,
+        audio: false
+      }
+    ];
 
+    let activeStream: MediaStream | null = null;
+    let lastError: any = null;
+
+    for (let i = 0; i < constraintVariants.length; i++) {
+      try {
+        activeStream = await navigator.mediaDevices.getUserMedia(constraintVariants[i]);
+        if (activeStream) break;
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Camera attempt ${i + 1} failed:`, err?.name, err?.message);
+        // If user explicitly denied or security error in iframe, trying looser resolution constraints won't help
+        if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError' || err?.name === 'PermissionDeniedError') {
+          break;
+        }
+      }
+    }
+
+    setIsRequestingCamera(false);
+
+    if (!activeStream) {
+      const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+      const errName = lastError?.name || '';
+      const errMessage = lastError?.message || '';
+
+      console.error('All camera attempts failed:', lastError);
+
+      if (errName === 'SecurityError' || (isIframe && (errName === 'NotAllowedError' || errName === 'PermissionDeniedError'))) {
+        setCameraErrorInfo({
+          type: 'iframe-restriction',
+          title: 'Camera Blocked by Embedded Preview Frame',
+          message: 'Mobile browsers (especially iOS Safari and mobile Chrome) block camera permission dialogs inside embedded iframes.',
+          detail: 'Tap "Open in Full Browser Tab" below. The app will open directly in Safari/Chrome where the native camera permission popup will appear.',
+          actionType: 'open-tab'
+        });
+      } else if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+        setCameraErrorInfo({
+          type: 'permission-denied',
+          title: 'Camera Permission Denied / Blocked',
+          message: 'The browser denied access to your camera or was previously set to "Block".',
+          detail: isIframe
+            ? 'Because this is inside an embedded preview frame, tap "Open in Full Browser Tab" to grant permission directly.'
+            : 'To allow: Tap the lock (🔒) or page settings (aA) icon in your mobile browser address bar, set Camera to "Allow", and reload.',
+          actionType: isIframe ? 'open-tab' : 'settings'
+        });
+      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        setCameraErrorInfo({
+          type: 'not-found',
+          title: 'No Camera Detected',
+          message: 'No physical camera hardware was found on this device or the camera is disabled.',
+          detail: errMessage,
+          actionType: 'video-upload'
+        });
+      } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+        setCameraErrorInfo({
+          type: 'busy',
+          title: 'Camera In Use By Another Application',
+          message: 'Your camera is already in use by another tab, app, or system background process.',
+          detail: 'Please close other camera apps and tap "Retry Camera".',
+          actionType: 'retry'
+        });
+      } else {
+        setCameraErrorInfo({
+          type: 'generic',
+          title: 'Camera Initialization Error',
+          message: errMessage || 'Unable to connect to the camera hardware.',
+          detail: `Error code: ${errName || 'UNKNOWN'}`,
+          actionType: 'open-tab'
+        });
+      }
+      return;
+    }
+
+    // Successfully acquired video stream
+    try {
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        videoRef.current.srcObject = activeStream;
         await videoRef.current.play();
         setIsWebcamActive(true);
         setFacingMode(mode);
         setIsMirrored(mode === 'user');
+        setCameraErrorInfo(null);
 
         // Check torch capability
-        const track = stream.getVideoTracks()[0];
-        const capabilities = track.getCapabilities?.() as any;
-        setTorchSupported(Boolean(capabilities?.torch));
+        try {
+          const track = activeStream.getVideoTracks()[0];
+          const capabilities = track?.getCapabilities?.() as any;
+          setTorchSupported(Boolean(capabilities?.torch));
+        } catch {}
 
         if (!isAudioMuted) {
           AudioCoach.speak(`Gym camera active. Step back 6-8 feet to calibrate.`);
         }
       }
-    } catch (err: any) {
-      console.error('Camera access error:', err);
-      setCameraError('Camera access denied. Please grant camera permissions in your browser settings.');
+    } catch (playErr: any) {
+      console.error('Camera play error:', playErr);
+      setCameraErrorInfo({
+        type: 'generic',
+        title: 'Video Stream Playback Prevented',
+        message: 'Camera stream was granted, but browser autoplay prevented playback.',
+        detail: playErr?.message,
+        actionType: 'retry'
+      });
     }
   };
 
   const stopWebcam = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
+    if (videoRef.current) {
+      if (videoRef.current.srcObject) {
+        try {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {}
+        videoRef.current.srcObject = null;
+      }
+      videoRef.current.src = '';
     }
     setIsWebcamActive(false);
     setIsTorchOn(false);
     setFramingStatus('none');
+  };
+
+  // Handle direct video upload / native camera capture analysis
+  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    if (videoRef.current) {
+      if (videoRef.current.srcObject) {
+        try {
+          const stream = videoRef.current.srcObject as MediaStream;
+          stream.getTracks().forEach((track) => track.stop());
+        } catch {}
+        videoRef.current.srcObject = null;
+      }
+      videoRef.current.src = url;
+      videoRef.current.loop = true;
+      videoRef.current.play().then(() => {
+        setIsWebcamActive(true);
+        setIsMirrored(false);
+        setCameraErrorInfo(null);
+        if (!isAudioMuted) {
+          AudioCoach.speak('Gym video loaded. Real biomechanics tracking active.');
+        }
+      }).catch((err) => {
+        console.error('Failed to play recorded video:', err);
+      });
+    }
   };
 
   const flipCamera = () => {
@@ -640,23 +838,169 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
         </div>
       )}
 
-      {/* Camera Error Notice if permissions denied */}
-      {cameraError && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-amber-200 text-xs sm:text-sm flex items-start space-x-3">
-          <AlertTriangle className="h-5 w-5 text-amber-400 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="font-bold text-amber-300">Camera Access Required</p>
-            <p className="mt-1 text-neutral-300">{cameraError}</p>
-            <button
-              onClick={() => startWebcam()}
-              className="mt-2.5 inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-amber-400 text-neutral-950 font-bold text-xs hover:bg-amber-300"
-            >
-              <Camera className="h-3.5 w-3.5" />
-              <span>Retry Camera Permission</span>
-            </button>
+      {/* Iframe Mobile Quick Notice if running inside preview frame */}
+      {isInIframe && !isWebcamActive && (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2.5 text-xs text-cyan-200">
+          <div className="flex items-center space-x-2">
+            <Info className="h-4 w-4 text-cyan-400 flex-shrink-0" />
+            <span>
+              <strong>Mobile Tip:</strong> Running in embedded preview. For native camera permission prompts on iOS Safari / Chrome, open in a direct tab.
+            </span>
           </div>
+          <a
+            href={typeof window !== 'undefined' ? window.location.href : '#'}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-shrink-0 inline-flex items-center space-x-1 rounded-lg bg-cyan-500/20 border border-cyan-500/40 px-2.5 py-1 text-xs font-bold text-cyan-200 hover:bg-cyan-500/30 transition-all"
+          >
+            <span>Open Direct Tab</span>
+            <ExternalLink className="h-3 w-3" />
+          </a>
         </div>
       )}
+
+      {/* Camera Diagnostic & Permission Guide Banner */}
+      {cameraErrorInfo && (
+        <div className="rounded-xl border border-amber-500/50 bg-neutral-900/95 p-4 sm:p-5 text-neutral-200 shadow-2xl space-y-3.5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start space-x-3">
+              <div className="h-9 w-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
+                <ShieldAlert className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-white text-sm sm:text-base flex items-center gap-2">
+                  <span>{cameraErrorInfo.title}</span>
+                  {isInIframe && (
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      Embedded Frame
+                    </span>
+                  )}
+                </h4>
+                <p className="mt-1 text-xs sm:text-sm text-neutral-300 leading-relaxed">
+                  {cameraErrorInfo.message}
+                </p>
+                {cameraErrorInfo.detail && (
+                  <p className="mt-1 text-xs text-neutral-400 font-mono">
+                    {cameraErrorInfo.detail}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setCameraErrorInfo(null)}
+              className="text-neutral-500 hover:text-white text-xs p-1"
+              title="Dismiss notice"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2.5 pt-1">
+            {/* 1. Open in full browser tab */}
+            <a
+              id="open-direct-tab-btn"
+              href={typeof window !== 'undefined' ? window.location.href : '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center space-x-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
+            >
+              <ExternalLink className="h-4 w-4" />
+              <span>Open in Full Browser Tab</span>
+            </a>
+
+            {/* 2. Retry with visual loader */}
+            <button
+              id="retry-camera-btn"
+              onClick={() => startWebcam(facingMode)}
+              disabled={isRequestingCamera}
+              className="inline-flex items-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 px-4 py-2.5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700 transition-all disabled:opacity-50 cursor-pointer"
+            >
+              {isRequestingCamera ? (
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+              ) : (
+                <Camera className="h-4 w-4 text-emerald-400" />
+              )}
+              <span>{isRequestingCamera ? 'Requesting Device...' : 'Retry Camera'}</span>
+            </button>
+
+            {/* 3. Copy Link for mobile browser */}
+            <button
+              id="copy-link-btn"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  navigator.clipboard.writeText(window.location.href);
+                  setHasCopiedAppUrl(true);
+                  setTimeout(() => setHasCopiedAppUrl(false), 2000);
+                }
+              }}
+              className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
+            >
+              {hasCopiedAppUrl ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+              <span>{hasCopiedAppUrl ? 'URL Copied!' : 'Copy Direct URL'}</span>
+            </button>
+
+            {/* 4. Upload / Record Gym Video fallback */}
+            <button
+              id="upload-gym-video-btn"
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
+            >
+              <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
+              <span>Upload / Record Video Set</span>
+            </button>
+
+            {/* 5. Troubleshoot walkthrough toggle */}
+            <button
+              onClick={() => setShowTroubleshootGuide(!showTroubleshootGuide)}
+              className="inline-flex items-center space-x-1 text-xs text-neutral-400 hover:text-emerald-400 underline ml-auto"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              <span>{showTroubleshootGuide ? 'Hide Permission Steps' : 'How to Allow in Browser'}</span>
+            </button>
+          </div>
+
+          {/* Collapsible Mobile Browser Step-by-Step Settings Guide */}
+          {showTroubleshootGuide && (
+            <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3.5 text-xs space-y-3">
+              <p className="font-bold text-neutral-200">Quick Permission Reset Steps:</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-1.5">
+                  <span className="font-bold text-emerald-400 block">📱 iPhone / iOS Safari</span>
+                  <ol className="list-decimal list-inside space-y-1 text-neutral-300">
+                    <li>Look at the bottom search bar (URL bar).</li>
+                    <li>Tap the <strong>"aA"</strong> or settings icon on the left.</li>
+                    <li>Tap <strong>Website Settings</strong>.</li>
+                    <li>Change <strong>Camera</strong> from "Ask" or "Deny" to <strong>Allow</strong>.</li>
+                    <li>Tap Done and reload the page.</li>
+                  </ol>
+                </div>
+
+                <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-3 space-y-1.5">
+                  <span className="font-bold text-cyan-400 block">🤖 Android / Chrome</span>
+                  <ol className="list-decimal list-inside space-y-1 text-neutral-300">
+                    <li>Tap the <strong>🔒 lock icon</strong> to the left of the URL.</li>
+                    <li>Tap <strong>Permissions</strong> → <strong>Camera</strong>.</li>
+                    <li>Switch the toggle to <strong>Allow</strong>.</li>
+                    <li>Reload this page and tap Start Camera.</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Hidden file input for native camera video recording or workout video upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/*"
+        capture="environment"
+        onChange={handleVideoUpload}
+        className="hidden"
+      />
 
       {/* Main Grid: Live Camera HUD & Video + AI Coaching Telemetry */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
@@ -668,48 +1012,108 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
               ref={videoRef}
               playsInline
               muted
+              autoPlay
               className={`absolute inset-0 h-full w-full object-cover ${
                 isMirrored ? 'scale-x-[-1]' : ''
               } ${isWebcamActive ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
             />
 
-            {/* Inactive Camera State: Dedicated Mobile Gym Launcher (NO SIMULATION) */}
+            {/* Inactive Camera State: Dedicated Mobile Gym Launcher */}
             {!isWebcamActive && (
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-b from-neutral-900/90 via-neutral-950 to-neutral-950 p-6 text-center">
-                <div className="h-16 w-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-4 shadow-lg shadow-emerald-500/10">
-                  <Smartphone className="h-8 w-8" />
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-                  Mobile Gym Camera Ready
-                </h3>
-                <p className="text-xs sm:text-sm text-neutral-400 max-w-md mt-1.5 mb-6">
-                  Prop your phone against a water bottle or gym bench 6-8 feet away. Real AI lines, joint points, and rep counts will stream live over your camera feed.
-                </p>
+                {isRequestingCamera ? (
+                  <div className="flex flex-col items-center space-y-3">
+                    <Loader2 className="h-12 w-12 text-emerald-400 animate-spin" />
+                    <h3 className="text-lg font-bold text-white">Connecting to Camera Hardware...</h3>
+                    <p className="text-xs text-neutral-400 max-w-xs">
+                      Please tap <strong>"Allow"</strong> when your browser or phone asks for camera permission.
+                    </p>
+                  </div>
+                ) : cameraErrorInfo ? (
+                  <div className="flex flex-col items-center max-w-md space-y-3">
+                    <div className="h-14 w-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-lg">
+                      <Camera className="h-7 w-7" />
+                    </div>
+                    <h3 className="text-lg sm:text-xl font-bold text-white">
+                      {cameraErrorInfo.title}
+                    </h3>
+                    <p className="text-xs text-neutral-400 leading-relaxed">
+                      {cameraErrorInfo.message}
+                    </p>
 
-                <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
-                  <button
-                    id="activate-mobile-camera-btn"
-                    onClick={() => startWebcam('user')}
-                    className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3.5 px-6 text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-xl shadow-emerald-500/25 cursor-pointer"
-                  >
-                    <Camera className="h-5 w-5" />
-                    <span>Start Front Camera (Selfie)</span>
-                  </button>
+                    <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full pt-2">
+                      <a
+                        href={typeof window !== 'undefined' ? window.location.href : '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3 px-5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        <span>Launch in Direct Tab</span>
+                      </a>
 
-                  <button
-                    id="activate-rear-camera-btn"
-                    onClick={() => startWebcam('environment')}
-                    className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800/80 py-3.5 px-6 text-sm font-bold text-white hover:bg-neutral-700 transition-all cursor-pointer"
-                  >
-                    <SwitchCamera className="h-5 w-5 text-emerald-400" />
-                    <span>Start Rear Camera</span>
-                  </button>
-                </div>
+                      <button
+                        onClick={() => startWebcam(facingMode)}
+                        className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 py-3 px-5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700"
+                      >
+                        <Camera className="h-4 w-4 text-emerald-400" />
+                        <span>Retry Camera</span>
+                      </button>
+                    </div>
 
-                <div className="mt-5 flex items-center space-x-2 text-[11px] font-mono text-neutral-400">
-                  <Radio className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Real Biometric Tracking • Zero Simulated Data • Headphone Audio Ready</span>
-                </div>
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex items-center space-x-1.5 text-xs text-neutral-400 hover:text-cyan-400 pt-1"
+                    >
+                      <UploadCloud className="h-3.5 w-3.5" />
+                      <span>Or record / analyze video with native camera</span>
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="h-16 w-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 mb-4 shadow-lg shadow-emerald-500/10">
+                      <Smartphone className="h-8 w-8" />
+                    </div>
+                    <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                      Mobile Gym Camera Ready
+                    </h3>
+                    <p className="text-xs sm:text-sm text-neutral-400 max-w-md mt-1.5 mb-6">
+                      Prop your phone against a water bottle or gym bench 6-8 feet away. Real AI skeleton lines, joint points, and rep counts will stream live over your camera feed.
+                    </p>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full max-w-sm">
+                      <button
+                        id="activate-mobile-camera-btn"
+                        onClick={() => startWebcam('user')}
+                        className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3.5 px-6 text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-xl shadow-emerald-500/25 cursor-pointer"
+                      >
+                        <Camera className="h-5 w-5" />
+                        <span>Start Front Camera (Selfie)</span>
+                      </button>
+
+                      <button
+                        id="activate-rear-camera-btn"
+                        onClick={() => startWebcam('environment')}
+                        className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800/80 py-3.5 px-6 text-sm font-bold text-white hover:bg-neutral-700 transition-all cursor-pointer"
+                      >
+                        <SwitchCamera className="h-5 w-5 text-emerald-400" />
+                        <span>Start Rear Camera</span>
+                      </button>
+                    </div>
+
+                    <div className="mt-4 flex items-center space-x-3 text-[11px] font-mono text-neutral-400">
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center space-x-1.5 text-neutral-400 hover:text-cyan-400 underline cursor-pointer"
+                      >
+                        <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
+                        <span>Analyze recorded set video</span>
+                      </button>
+                      <span>•</span>
+                      <span>Audio Coach Ready</span>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

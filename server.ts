@@ -15,6 +15,14 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '25mb' }));
 
+// Set permissive camera and microphone headers for mobile iframe and preview contexts
+app.use((_req, res, next) => {
+  res.setHeader('Permissions-Policy', 'camera=(self "*"), microphone=(self "*")');
+  res.setHeader('Feature-Policy', 'camera *; microphone *');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+});
+
 // Lazy Gemini client helper
 let geminiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
