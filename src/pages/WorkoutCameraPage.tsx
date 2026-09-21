@@ -26,9 +26,11 @@ import {
   HelpCircle,
   UploadCloud,
   ShieldAlert,
-  ShieldCheck
+  ShieldCheck,
+  QrCode
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import QRCode from 'qrcode';
 import { EXERCISE_LIBRARY } from '../exercise-engine/exercises';
 import { ExerciseStateMachine, RepCompletedEvent } from '../exercise-engine/state-machine';
 import { CanvasRenderer } from '../pose-engine/CanvasRenderer';
@@ -75,7 +77,11 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const [cameraErrorInfo, setCameraErrorInfo] = useState<CameraErrorInfo | null>(null);
   const [isRequestingCamera, setIsRequestingCamera] = useState(false);
   const [isInIframe, setIsInIframe] = useState(false);
+  const [isLanHttp, setIsLanHttp] = useState(false);
   const [showTroubleshootGuide, setShowTroubleshootGuide] = useState(false);
+  const [cloudHttpsUrl, setCloudHttpsUrl] = useState('https://ais-dev-3iz27el2pow7vaq2juy3rp-779102128245.asia-east1.run.app');
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  const [showQrModal, setShowQrModal] = useState(false);
 
   // Athlete framing status (detected from real camera landmarks)
   const [framingStatus, setFramingStatus] = useState<'none' | 'partial' | 'locked'>('none');
@@ -106,14 +112,39 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
   const lastSystemStreamSyncRef = useRef<number>(0);
   const completedRepsRef = useRef<RepCompletedEvent[]>([]);
 
-  // Detect iframe environment on mount
+  // Detect iframe and LAN environment on mount, fetch server info and generate QR code
   useEffect(() => {
     try {
       const inIframe = typeof window !== 'undefined' && window.self !== window.top;
       setIsInIframe(inIframe);
+
+      const isHttp = typeof window !== 'undefined' && window.location.protocol === 'http:';
+      const isNotLocalhost = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+      setIsLanHttp(isHttp && isNotLocalhost);
     } catch {
       setIsInIframe(true);
     }
+
+    // Fetch server information for Cloud HTTPS URL
+    fetch('/api/server-info')
+      .then((res) => res.json())
+      .then((data) => {
+        const targetUrl = data.cloudHttpsUrl || 'https://ais-dev-3iz27el2pow7vaq2juy3rp-779102128245.asia-east1.run.app';
+        setCloudHttpsUrl(targetUrl);
+        QRCode.toDataURL(targetUrl, {
+          margin: 1.5,
+          width: 280,
+          color: { dark: '#000000', light: '#ffffff' }
+        }).then(setQrCodeDataUrl).catch((e) => console.warn('QR error:', e));
+      })
+      .catch(() => {
+        const fallbackUrl = 'https://ais-dev-3iz27el2pow7vaq2juy3rp-779102128245.asia-east1.run.app';
+        QRCode.toDataURL(fallbackUrl, {
+          margin: 1.5,
+          width: 280,
+          color: { dark: '#000000', light: '#ffffff' }
+        }).then(setQrCodeDataUrl).catch(() => {});
+      });
   }, []);
 
   // Rest Timer Interval
@@ -246,32 +277,6 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
 
     const mode = targetFacing || facingMode;
 
-    // 1. Verify Secure Context (HTTPS or localhost)
-    if (typeof window !== 'undefined' && !window.isSecureContext && window.location.hostname !== 'localhost') {
-      setIsRequestingCamera(false);
-      setCameraErrorInfo({
-        type: 'insecure',
-        title: 'HTTPS Security Required',
-        message: 'Mobile browsers strictly block camera hardware over unencrypted HTTP connections.',
-        detail: 'Please access this app via HTTPS.',
-        actionType: 'open-tab'
-      });
-      return;
-    }
-
-    // 2. Check mediaDevices support
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setIsRequestingCamera(false);
-      setCameraErrorInfo({
-        type: 'generic',
-        title: 'Camera Device API Unavailable',
-        message: 'navigator.mediaDevices.getUserMedia is not supported by your current browser engine or webview.',
-        detail: navigator.userAgent,
-        actionType: 'open-tab'
-      });
-      return;
-    }
-
     // Stop existing stream tracks
     if (videoRef.current) {
       if (videoRef.current.srcObject) {
@@ -284,7 +289,33 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
       videoRef.current.src = '';
     }
 
-    // 3. Progressive constraint attempts (high-def down to basic video)
+    // Check mediaDevices support (may be disabled on plain HTTP on LAN by some mobile browsers)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setIsRequestingCamera(false);
+      const isHttp = typeof window !== 'undefined' && window.location.protocol === 'http:';
+      const isNotLocalhost = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+
+      if (isHttp && isNotLocalhost) {
+        setCameraErrorInfo({
+          type: 'insecure',
+          title: 'Mobile LAN HTTP Detected (Camera Blocked by Mobile OS)',
+          message: 'Mobile browsers (Chrome & Safari) strictly block real-time WebRTC camera streams on unencrypted LAN addresses (http://192.168.x.x).',
+          detail: 'Choose an instant solution: scan the QR code to open the Cloud HTTPS URL with camera access, record a set with your phone native camera, or enable Chrome LAN flag.',
+          actionType: 'open-tab'
+        });
+      } else {
+        setCameraErrorInfo({
+          type: 'generic',
+          title: 'Camera Device API Unavailable',
+          message: 'navigator.mediaDevices.getUserMedia is not supported by your current browser engine or webview.',
+          detail: navigator.userAgent,
+          actionType: 'open-tab'
+        });
+      }
+      return;
+    }
+
+    // Progressive constraint attempts (high-def down to basic video)
     const constraintVariants: MediaStreamConstraints[] = [
       // Primary: Gym resolution with ideal facing
       {
@@ -342,7 +373,18 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
 
       console.error('All camera attempts failed:', lastError);
 
-      if (errName === 'SecurityError' || (isIframe && (errName === 'NotAllowedError' || errName === 'PermissionDeniedError'))) {
+      const isHttp = typeof window !== 'undefined' && window.location.protocol === 'http:';
+      const isNotLocalhost = typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+
+      if (isHttp && isNotLocalhost) {
+        setCameraErrorInfo({
+          type: 'insecure',
+          title: 'Mobile LAN HTTP Detected (Camera Blocked by Mobile OS)',
+          message: 'Mobile browsers (Chrome & Safari) block real-time WebRTC camera streams on unencrypted LAN addresses (http://192.168.x.x).',
+          detail: 'Choose an instant solution: scan the QR code to open the Cloud HTTPS URL with camera access, record a set with your phone native camera, or enable Chrome LAN flag.',
+          actionType: 'open-tab'
+        });
+      } else if (errName === 'SecurityError' || (isIframe && (errName === 'NotAllowedError' || errName === 'PermissionDeniedError'))) {
         setCameraErrorInfo({
           type: 'iframe-restriction',
           title: 'Camera Blocked by Embedded Preview Frame',
@@ -775,6 +817,17 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
             </button>
           )}
 
+          {/* Mobile QR Code Button */}
+          <button
+            id="mobile-qr-btn"
+            onClick={() => setShowQrModal(true)}
+            title="Scan QR Code to open on Mobile with Cloud HTTPS"
+            className="flex items-center space-x-1 p-2 rounded-lg border border-neutral-800 bg-neutral-900 text-neutral-300 hover:text-white text-xs font-medium"
+          >
+            <QrCode className="h-4 w-4 text-emerald-400" />
+            <span className="hidden sm:inline">Mobile QR</span>
+          </button>
+
           {/* Gym Session Code Relay button */}
           <button
             id="gym-pair-btn"
@@ -838,8 +891,39 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
         </div>
       )}
 
+      {/* LAN HTTP Mode Notice if user accesses server over local Wi-Fi / LAN without HTTPS */}
+      {isLanHttp && !isWebcamActive && !cameraErrorInfo && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 shadow-md">
+          <div className="flex items-center space-x-2.5">
+            <ShieldAlert className="h-5 w-5 text-amber-400 flex-shrink-0" />
+            <div>
+              <p className="font-bold text-amber-300">Mobile Phone on Local Network (HTTP) Detected</p>
+              <p className="text-[11px] text-amber-200/90">
+                Mobile browsers block real-time WebRTC camera on plain HTTP IP addresses. Use the HTTPS QR code or the Native Camera set recorder below!
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => setShowQrModal(true)}
+              className="inline-flex items-center space-x-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-sm"
+            >
+              <QrCode className="h-3.5 w-3.5" />
+              <span>Scan HTTPS QR</span>
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center space-x-1.5 rounded-lg border border-amber-500/40 bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-neutral-800 transition-all"
+            >
+              <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
+              <span>Native Camera (LAN)</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Iframe Mobile Quick Notice if running inside preview frame */}
-      {isInIframe && !isWebcamActive && (
+      {isInIframe && !isWebcamActive && !isLanHttp && (
         <div className="flex items-center justify-between gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2.5 text-xs text-cyan-200">
           <div className="flex items-center space-x-2">
             <Info className="h-4 w-4 text-cyan-400 flex-shrink-0" />
@@ -861,7 +945,7 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
 
       {/* Camera Diagnostic & Permission Guide Banner */}
       {cameraErrorInfo && (
-        <div className="rounded-xl border border-amber-500/50 bg-neutral-900/95 p-4 sm:p-5 text-neutral-200 shadow-2xl space-y-3.5">
+        <div className="rounded-xl border border-amber-500/50 bg-neutral-900/95 p-4 sm:p-5 text-neutral-200 shadow-2xl space-y-4">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start space-x-3">
               <div className="h-9 w-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 flex-shrink-0 mt-0.5">
@@ -870,6 +954,11 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
               <div>
                 <h4 className="font-bold text-white text-sm sm:text-base flex items-center gap-2">
                   <span>{cameraErrorInfo.title}</span>
+                  {cameraErrorInfo.type === 'insecure' && (
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+                      HTTP LAN Block
+                    </span>
+                  )}
                   {isInIframe && (
                     <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
                       Embedded Frame
@@ -896,73 +985,191 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
             </button>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex flex-wrap items-center gap-2.5 pt-1">
-            {/* 1. Open in full browser tab */}
-            <a
-              id="open-direct-tab-btn"
-              href={typeof window !== 'undefined' ? window.location.href : '#'}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center space-x-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
-            >
-              <ExternalLink className="h-4 w-4" />
-              <span>Open in Full Browser Tab</span>
-            </a>
+          {/* Specialized Solutions for Mobile LAN HTTP Restriction */}
+          {cameraErrorInfo.type === 'insecure' ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+              {/* Option 1: Scan / Open Cloud HTTPS */}
+              <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-emerald-400 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                      <QrCode className="h-3.5 w-3.5" />
+                      <span>Option 1 (Recommended)</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                      Guaranteed
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-300">
+                    Scan this QR code with your phone camera to open the live Cloud HTTPS app with instant camera permissions:
+                  </p>
+                  {qrCodeDataUrl && (
+                    <div className="flex justify-center py-1">
+                      <div className="rounded-lg bg-white p-2 shadow-md">
+                        <img src={qrCodeDataUrl} alt="HTTPS QR Code" className="h-28 w-28 object-contain" />
+                      </div>
+                    </div>
+                  )}
+                </div>
 
-            {/* 2. Retry with visual loader */}
-            <button
-              id="retry-camera-btn"
-              onClick={() => startWebcam(facingMode)}
-              disabled={isRequestingCamera}
-              className="inline-flex items-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 px-4 py-2.5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700 transition-all disabled:opacity-50 cursor-pointer"
-            >
-              {isRequestingCamera ? (
-                <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
-              ) : (
-                <Camera className="h-4 w-4 text-emerald-400" />
-              )}
-              <span>{isRequestingCamera ? 'Requesting Device...' : 'Retry Camera'}</span>
-            </button>
+                <div className="space-y-1.5 pt-1">
+                  <a
+                    href={cloudHttpsUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full inline-flex items-center justify-center space-x-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-sm"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span>Open Cloud HTTPS</span>
+                  </a>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(cloudHttpsUrl);
+                      setHasCopiedAppUrl(true);
+                      setTimeout(() => setHasCopiedAppUrl(false), 2000);
+                    }}
+                    className="w-full inline-flex items-center justify-center space-x-1 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs text-neutral-300 hover:text-white"
+                  >
+                    {hasCopiedAppUrl ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+                    <span>{hasCopiedAppUrl ? 'Copied HTTPS Link!' : 'Copy HTTPS Link'}</span>
+                  </button>
+                </div>
+              </div>
 
-            {/* 3. Copy Link for mobile browser */}
-            <button
-              id="copy-link-btn"
-              onClick={() => {
-                if (typeof window !== 'undefined') {
-                  navigator.clipboard.writeText(window.location.href);
-                  setHasCopiedAppUrl(true);
-                  setTimeout(() => setHasCopiedAppUrl(false), 2000);
-                }
-              }}
-              className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
-            >
-              {hasCopiedAppUrl ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-              <span>{hasCopiedAppUrl ? 'URL Copied!' : 'Copy Direct URL'}</span>
-            </button>
+              {/* Option 2: Native Camera Video Set Recording */}
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-3.5 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-cyan-400 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                      <Camera className="h-3.5 w-3.5" />
+                      <span>Option 2 (Works on LAN)</span>
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
+                      No HTTPS Needed
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-300 leading-relaxed">
+                    HTML5 camera capture works on plain HTTP! Tapping below opens your phone's native camera. Record your reps, hit "Done", and FitVision AI analyzes the video with full skeleton landmarks and rep count.
+                  </p>
+                </div>
 
-            {/* 4. Upload / Record Gym Video fallback */}
-            <button
-              id="upload-gym-video-btn"
-              onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
-            >
-              <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
-              <span>Upload / Record Video Set</span>
-            </button>
+                <div className="pt-2">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full inline-flex items-center justify-center space-x-2 rounded-xl bg-cyan-500 px-4 py-3 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-cyan-400 transition-all shadow-md shadow-cyan-500/20 cursor-pointer"
+                  >
+                    <Camera className="h-4 w-4" />
+                    <span>Record Set with Phone Camera</span>
+                  </button>
+                  <p className="text-[10px] text-neutral-400 text-center mt-1.5">
+                    iOS Safari & Android Chrome allow file capture over LAN
+                  </p>
+                </div>
+              </div>
 
-            {/* 5. Troubleshoot walkthrough toggle */}
-            <button
-              onClick={() => setShowTroubleshootGuide(!showTroubleshootGuide)}
-              className="inline-flex items-center space-x-1 text-xs text-neutral-400 hover:text-emerald-400 underline ml-auto"
-            >
-              <HelpCircle className="h-3.5 w-3.5" />
-              <span>{showTroubleshootGuide ? 'Hide Permission Steps' : 'How to Allow in Browser'}</span>
-            </button>
-          </div>
+              {/* Option 3: Chrome LAN Flag for Live 60 FPS */}
+              <div className="rounded-xl border border-neutral-800 bg-neutral-950/80 p-3.5 flex flex-col justify-between space-y-2">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-amber-400 text-xs uppercase tracking-wider">
+                      Option 3: Chrome LAN Flag
+                    </span>
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                      Live 60 FPS
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-300">
+                    To allow live WebRTC streaming on phone Chrome over LAN:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-neutral-400">
+                    <li>In phone Chrome, go to:</li>
+                    <li className="font-mono text-cyan-300 break-all select-all text-[10px] pl-1">
+                      chrome://flags/#unsafely-treat-insecure-origin-as-secure
+                    </li>
+                    <li>Add: <span className="font-mono text-emerald-400">{typeof window !== 'undefined' ? `http://${window.location.host}` : 'http://<lan-ip>:3000'}</span></li>
+                    <li>Set to <strong>Enabled</strong> & tap <strong>Relaunch</strong>.</li>
+                  </ol>
+                </div>
+
+                <button
+                  onClick={() => {
+                    if (typeof window !== 'undefined') {
+                      navigator.clipboard.writeText(`http://${window.location.host}`);
+                      setHasCopiedAppUrl(true);
+                      setTimeout(() => setHasCopiedAppUrl(false), 2000);
+                    }
+                  }}
+                  className="w-full inline-flex items-center justify-center space-x-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-xs font-semibold text-neutral-300 hover:text-white"
+                >
+                  <Copy className="h-3 w-3" />
+                  <span>Copy LAN Origin</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Standard Diagnostic Action Buttons for other errors */
+            <div className="flex flex-wrap items-center gap-2.5 pt-1">
+              <a
+                id="open-direct-tab-btn"
+                href={typeof window !== 'undefined' ? window.location.href : '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center space-x-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-500/20 cursor-pointer"
+              >
+                <ExternalLink className="h-4 w-4" />
+                <span>Open in Full Browser Tab</span>
+              </a>
+
+              <button
+                id="retry-camera-btn"
+                onClick={() => startWebcam(facingMode)}
+                disabled={isRequestingCamera}
+                className="inline-flex items-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 px-4 py-2.5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700 transition-all disabled:opacity-50 cursor-pointer"
+              >
+                {isRequestingCamera ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                ) : (
+                  <Camera className="h-4 w-4 text-emerald-400" />
+                )}
+                <span>{isRequestingCamera ? 'Requesting Device...' : 'Retry Camera'}</span>
+              </button>
+
+              <button
+                id="copy-link-btn"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    navigator.clipboard.writeText(window.location.href);
+                    setHasCopiedAppUrl(true);
+                    setTimeout(() => setHasCopiedAppUrl(false), 2000);
+                  }
+                }}
+                className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
+              >
+                {hasCopiedAppUrl ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                <span>{hasCopiedAppUrl ? 'URL Copied!' : 'Copy Direct URL'}</span>
+              </button>
+
+              <button
+                id="upload-gym-video-btn"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center space-x-1.5 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2.5 text-xs font-semibold text-neutral-300 hover:text-white"
+              >
+                <UploadCloud className="h-3.5 w-3.5 text-cyan-400" />
+                <span>Upload / Record Video Set</span>
+              </button>
+
+              <button
+                onClick={() => setShowTroubleshootGuide(!showTroubleshootGuide)}
+                className="inline-flex items-center space-x-1 text-xs text-neutral-400 hover:text-emerald-400 underline ml-auto"
+              >
+                <HelpCircle className="h-3.5 w-3.5" />
+                <span>{showTroubleshootGuide ? 'Hide Permission Steps' : 'How to Allow in Browser'}</span>
+              </button>
+            </div>
+          )}
 
           {/* Collapsible Mobile Browser Step-by-Step Settings Guide */}
-          {showTroubleshootGuide && (
+          {showTroubleshootGuide && cameraErrorInfo.type !== 'insecure' && (
             <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3.5 text-xs space-y-3">
               <p className="font-bold text-neutral-200">Quick Permission Reset Steps:</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1041,33 +1248,63 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
                       {cameraErrorInfo.message}
                     </p>
 
-                    <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full pt-2">
-                      <a
-                        href={typeof window !== 'undefined' ? window.location.href : '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3 px-5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        <span>Launch in Direct Tab</span>
-                      </a>
+                    {cameraErrorInfo.type === 'insecure' ? (
+                      <div className="flex flex-col gap-2.5 w-full pt-2">
+                        <div className="flex flex-col sm:flex-row items-center gap-2 w-full">
+                          <button
+                            onClick={() => setShowQrModal(true)}
+                            className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3 px-4 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20 cursor-pointer"
+                          >
+                            <QrCode className="h-4 w-4" />
+                            <span>Scan QR for HTTPS Camera</span>
+                          </button>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="w-full flex items-center justify-center space-x-2 rounded-xl bg-cyan-500 py-3 px-4 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-cyan-400 shadow-lg shadow-cyan-500/20 cursor-pointer"
+                          >
+                            <Camera className="h-4 w-4" />
+                            <span>Record Set with Phone</span>
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => startWebcam(facingMode)}
+                          className="w-full flex items-center justify-center space-x-1.5 rounded-lg border border-neutral-800 bg-neutral-900 py-2 px-3 text-xs text-neutral-400 hover:text-white"
+                        >
+                          <Camera className="h-3.5 w-3.5 text-emerald-400" />
+                          <span>Retry WebRTC Camera</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex flex-col sm:flex-row items-center gap-2.5 w-full pt-2">
+                          <a
+                            href={typeof window !== 'undefined' ? window.location.href : '#'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-3 px-5 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 shadow-lg shadow-emerald-500/20"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                            <span>Launch in Direct Tab</span>
+                          </a>
 
-                      <button
-                        onClick={() => startWebcam(facingMode)}
-                        className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 py-3 px-5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700"
-                      >
-                        <Camera className="h-4 w-4 text-emerald-400" />
-                        <span>Retry Camera</span>
-                      </button>
-                    </div>
+                          <button
+                            onClick={() => startWebcam(facingMode)}
+                            className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 py-3 px-5 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700"
+                          >
+                            <Camera className="h-4 w-4 text-emerald-400" />
+                            <span>Retry Camera</span>
+                          </button>
+                        </div>
 
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex items-center space-x-1.5 text-xs text-neutral-400 hover:text-cyan-400 pt-1"
-                    >
-                      <UploadCloud className="h-3.5 w-3.5" />
-                      <span>Or record / analyze video with native camera</span>
-                    </button>
+                        <button
+                          onClick={() => fileInputRef.current?.click()}
+                          className="inline-flex items-center space-x-1.5 text-xs text-neutral-400 hover:text-cyan-400 pt-1"
+                        >
+                          <UploadCloud className="h-3.5 w-3.5" />
+                          <span>Or record / analyze video with native camera</span>
+                        </button>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <>
@@ -1490,6 +1727,83 @@ export const WorkoutCameraPage: React.FC<WorkoutCameraPageProps> = ({
               >
                 Done
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Mobile QR Code Modal for Cloud HTTPS & instant camera permissions */}
+      {showQrModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900 p-5 sm:p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2.5">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  <QrCode className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-base">Mobile Camera (Cloud HTTPS)</h3>
+                  <p className="text-xs text-neutral-400">Instant camera permission on your phone</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowQrModal(false)}
+                className="text-neutral-400 hover:text-white text-sm p-1 rounded-lg hover:bg-neutral-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex flex-col items-center justify-center rounded-xl border border-neutral-800 bg-neutral-950 p-5 text-center space-y-3">
+              {qrCodeDataUrl ? (
+                <div className="rounded-xl bg-white p-2.5 shadow-xl">
+                  <img src={qrCodeDataUrl} alt="Mobile QR Code" className="h-44 w-44 rounded-lg object-contain" />
+                </div>
+              ) : (
+                <div className="h-44 w-44 flex items-center justify-center rounded-xl bg-neutral-900 text-neutral-500">
+                  <Loader2 className="h-8 w-8 animate-spin text-emerald-400" />
+                </div>
+              )}
+
+              <p className="text-xs text-neutral-300 max-w-xs font-medium">
+                Aim your phone camera at this QR code. It opens FitVision on HTTPS with full camera permissions enabled!
+              </p>
+              <div className="rounded-lg bg-neutral-900 px-3 py-1.5 font-mono text-[11px] text-emerald-400 break-all border border-neutral-800 max-w-full">
+                {cloudHttpsUrl}
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-2.5">
+              <a
+                href={cloudHttpsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full flex items-center justify-center space-x-2 rounded-xl bg-emerald-500 py-2.5 px-4 text-xs sm:text-sm font-bold text-neutral-950 hover:bg-emerald-400 transition-all shadow-md"
+              >
+                <ExternalLink className="h-4 w-4" />
+                <span>Open HTTPS App</span>
+              </a>
+
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(cloudHttpsUrl);
+                  setHasCopiedAppUrl(true);
+                  setTimeout(() => setHasCopiedAppUrl(false), 2000);
+                }}
+                className="w-full flex items-center justify-center space-x-2 rounded-xl border border-neutral-700 bg-neutral-800 py-2.5 px-4 text-xs sm:text-sm font-bold text-white hover:bg-neutral-700 transition-all"
+              >
+                {hasCopiedAppUrl ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                <span>{hasCopiedAppUrl ? 'Copied Link!' : 'Copy Link'}</span>
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-3 text-xs text-cyan-300 space-y-1">
+              <div className="flex items-center space-x-1.5 font-bold text-cyan-200">
+                <Smartphone className="h-4 w-4 text-cyan-400" />
+                <span>Gym Workout Tip</span>
+              </div>
+              <p className="text-cyan-200/80 leading-relaxed">
+                Once opened on your phone, prop it 6-8 feet away on the gym floor or against a dumbbell. AI lines, joint landmarks, and rep tracking will render directly on your screen!
+              </p>
             </div>
           </div>
         </div>

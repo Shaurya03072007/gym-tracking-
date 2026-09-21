@@ -43,13 +43,24 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-// Health check
+// Health check & Server Info for Mobile LAN / HTTPS pairing
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     service: 'FitVision AI Server',
     hasApiKey: Boolean(process.env.GEMINI_API_KEY),
     timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/server-info', (req: Request, res: Response) => {
+  const host = req.get('host') || 'localhost:3000';
+  const cloudHttpsUrl = 'https://ais-dev-3iz27el2pow7vaq2juy3rp-779102128245.asia-east1.run.app';
+  res.json({
+    cloudHttpsUrl,
+    sharedHttpsUrl: 'https://ais-pre-3iz27el2pow7vaq2juy3rp-779102128245.asia-east1.run.app',
+    requestHost: host,
+    isHttps: req.secure || req.headers['x-forwarded-proto'] === 'https'
   });
 });
 
