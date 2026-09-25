@@ -4,6 +4,12 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import https from 'https';
+import selfsigned from 'selfsigned';
+import { spawn, ChildProcess } from 'child_process';
+import { createProxyMiddleware, fixRequestBody } from 'http-proxy-middleware';
+import httpProxy from 'http-proxy';
+import net from 'net';
 
 dotenv.config();
 
@@ -584,11 +590,135 @@ app.get('/api/gym/session/:code/stream', (req: Request, res: Response) => {
   });
 });
 
+// ── Python Vision Backend ─────────────────────────────────────────────────────
+const PYTHON_PORT = 8000;
+const PYTHON_HOST = '127.0.0.1';
+let pythonProcess: ChildProcess | null = null;
+
+function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = net.createServer();
+    s.once('error', () => resolve(false));
+    s.once('listening', () => { s.close(); resolve(true); });
+    s.listen(port, '127.0.0.1');
+  });
+}
+
+async function startPythonBackend(): Promise<void> {
+  const free = await isPortFree(PYTHON_PORT);
+  if (!free) {
+    console.log(`[Python] Port ${PYTHON_PORT} already in use — skipping subprocess launch.`);
+    return;
+  }
+
+  const backendDir = path.join(__dirname, 'python_backend');
+  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+
+  pythonProcess = spawn(
+    pythonCmd,
+    ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', String(PYTHON_PORT), '--log-level', 'warning'],
+    {
+      cwd: backendDir,
+      stdio: 'inherit',
+      env: { ...process.env, PYTHONUNBUFFERED: '1' }
+    }
+  );
+
+  pythonProcess.on('error', (err) => {
+    console.error(`[Python] Failed to start: ${err.message}`);
+    console.error('[Python] Make sure Python 3.10+ is installed and run: pip install -r python_backend/requirements.txt');
+  });
+
+  pythonProcess.on('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      console.error(`[Python] Backend exited with code ${code}`);
+    }
+  });
+
+  // Graceful shutdown
+  process.on('exit', () => { if (pythonProcess) pythonProcess.kill(); });
+  process.on('SIGINT', () => { if (pythonProcess) pythonProcess.kill(); process.exit(); });
+  process.on('SIGTERM', () => { if (pythonProcess) pythonProcess.kill(); process.exit(); });
+
+  // Wait for Python to be ready (up to 15s)
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    const ready = !(await isPortFree(PYTHON_PORT));
+    if (ready) {
+      console.log(`[Python] Vision backend ready on http://${PYTHON_HOST}:${PYTHON_PORT}`);
+      return;
+    }
+  }
+  console.warn('[Python] Backend did not start within 15s — proxying will retry on first request.');
+}
+
+// Proxy /api/py/* → Python FastAPI backend (HTTP REST + MJPEG)
+const pythonProxy = createProxyMiddleware({
+  target: `http://${PYTHON_HOST}:${PYTHON_PORT}`,
+  changeOrigin: true,
+  pathRewrite: { '^/api/py': '' },
+  on: {
+    proxyReq: fixRequestBody,
+    error: (_err: Error, _req: any, res: any) => {
+      if (res && typeof res.status === 'function') {
+        res.status(503).json({ error: 'Python vision backend not available', hint: 'Run: pip install -r python_backend/requirements.txt' });
+      }
+    }
+  }
+});
+
+app.use('/api/py', pythonProxy);
+
+// Dedicated WebSocket reverse proxy for /api/py/ws/* → Python ws://
+const wsProxy = httpProxy.createProxyServer({
+  target: { host: PYTHON_HOST, port: PYTHON_PORT },
+  ws: true
+});
+
 // Vite & Static file serving
 async function start() {
+  // Start Python vision backend
+  await startPythonBackend();
+
+  const pems = await selfsigned.generate([{ name: 'commonName', value: 'localhost' }], { days: 365 } as any);
+  const server = https.createServer({
+    key: pems.private,
+    cert: pems.cert
+  }, app);
+
+  // Catch unhandled socket errors to prevent server crash
+  server.on('clientError', (err, socket) => {
+    if (err.message.includes('ECONNRESET')) return; // Ignore expected client resets
+    socket.destroy();
+  });
+
+  // Proxy WebSocket upgrades for /api/py/ws/* → Python ws://
+  server.on('upgrade', (req, socket, head) => {
+    socket.on('error', (err: any) => {
+      if (err.code !== 'ECONNRESET') {
+        console.error('[WS Socket] error:', err.message);
+      }
+    });
+
+    if (req.url && req.url.startsWith('/api/py/ws/')) {
+      // Strip /api/py prefix before forwarding to Python
+      req.url = req.url.replace('/api/py', '');
+      wsProxy.ws(req, socket, head, {}, (err) => {
+        if (err) console.error('[WS Proxy] upgrade error:', err.message);
+      });
+    }
+  });
+
+  wsProxy.on('error', (err, _req, socket: any) => {
+    console.error('[WS Proxy] error:', err.message);
+    if (socket && typeof socket.destroy === 'function') socket.destroy();
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
@@ -600,8 +730,8 @@ async function start() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`FitVision AI Server running on http://0.0.0.0:${PORT}`);
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`FitVision AI Server running on https://0.0.0.0:${PORT}`);
   });
 }
 
